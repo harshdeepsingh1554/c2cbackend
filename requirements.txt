@@ -1,0 +1,22 @@
+# Web Framework & Production Server
+flask
+flask-cors
+flask-apscheduler
+gunicorn
+python-dotenv
+
+# Database & Scraper
+supabase
+selenium
+pandas
+webdriver-manager
+
+# AI & NLP (Essential for your CareerEngine)
+spacy
+scikit-learn
+numpy
+
+# Optional/Other (If used in your engine)
+openai
+faiss-cpu
+openpyxl
