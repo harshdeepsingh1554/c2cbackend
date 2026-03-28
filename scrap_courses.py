@@ -22,6 +22,7 @@ MSME_SECTORS = [
 def get_driver():
     """Headless anti-bot Chrome driver."""
     opts = Options()
+    opts.binary_location = "/opt/render/project/.render/chrome/opt/google/chrome/google-chrome"
     opts.add_argument("--headless=new")                          # ✅ headless enabled
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_argument("--no-sandbox")
