@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from core.shared_utils import nlp
 
 # Load spaCy model for AI analysis
-nlp = spacy.load("en_core_web_md")
+nlp = spacy.load("en_core_web_sm")
 
 load_dotenv()
 
