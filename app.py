@@ -20,7 +20,8 @@ nlp = spacy.load("en_core_web_sm")
 load_dotenv()
 
 app = Flask(__name__)
-CORS(app)
+# Change this in app.py
+CORS(app, resources={r"/api/*": {"origins": "*"}})    
 
 # 1. Supabase Configuration
 url = os.getenv("SUPABASE_URL")
