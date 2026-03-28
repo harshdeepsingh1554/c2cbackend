@@ -302,6 +302,9 @@ def scheduled_scraper():
         smart_run_scraper()
 
 if __name__ == '__main__':
+    # Use the PORT env var provided by Render, default to 5000
+    port = int(os.environ.get("PORT", 5000))
     scheduler.init_app(app)
     scheduler.start()
-    app.run(debug=False, port=5000)
+    # In production, we don't use app.run(), but this is a safety fallback
+    app.run(host='0.0.0.0', port=port)
