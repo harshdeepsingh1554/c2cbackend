@@ -2,10 +2,10 @@ from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 from supabase import create_client, Client
 from flask_cors import CORS
-from flask_apscheduler import APScheduler
+
 from core.engine import CareerEngine
 from core.knowledge_base import COURSE_DB
-from run_pipeline import run_automated_pipeline  # Your scraper pipeline
+
 import os
 import time
 import pandas as pd
@@ -21,7 +21,6 @@ load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
-scheduler = APScheduler()
 
 # 1. Supabase Configuration
 url = os.getenv("SUPABASE_URL")
@@ -70,41 +69,7 @@ def normalize_profile(raw):
     }
 
 
-def smart_run_scraper():
-    """Wakes up and checks if 4 hours passed since last scrape."""
-    try:
-        # 1. Check metadata to see if it's time to run
-        res = supabase.table('scraper_metadata').select("last_run_at").eq('key', 'job_scraper').single().execute()
-        
-        if res.data:
-            last_run = datetime.fromisoformat(res.data['last_run_at'].replace('Z', '+00:00'))
-            now = datetime.now(timezone.utc)
-            
-            if now - last_run >= timedelta(hours=4):
-                print("🔄 4-hour window met. Starting FULL Update (Jobs + Courses)...")
-                
-                # A. Run Job Scraper (Naukri, TimesJobs, Shine)
-                run_automated_pipeline()
-                
-                # B. Run Course Scraper (Coursera, NPTEL, YouTube)
-                # Ensure you import this at the top of app.py
-                from run_pipeline import run_course_pipeline
-                run_course_pipeline()
-                
-                # C. Reload AI Brain with new data from Supabase
-                engine.refresh_cache() 
-                
-                # D. Update metadata to reset the 4-hour timer
-                supabase.table('scraper_metadata').update({
-                    "last_run_at": now.isoformat()
-                }).eq('key', 'job_scraper').execute()
-                
-                print("✅ Full sync complete.")
-        else:
-            print("⚠️ Metadata not found. Ensure key 'job_scraper' exists in Supabase.")
-            
-    except Exception as e:
-        print(f"⚠️ Smart Run Error: {e}")
+
 # ══════════════════════════════════════════════════════════════════════════════
 # 1. PROFILE ENDPOINTS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -294,17 +259,8 @@ def get_courses():
 # 6. AUTOMATED HOURLY SCRAPER (No human interaction needed)
 # ══════════════════════════════════════════════════════════════════════════════
 
-@scheduler.task('interval', id='job_scraper_task', minutes=30, misfire_grace_time=900)
-def scheduled_scraper():
-    with app.app_context():
-        # Call the smart function instead of the pipeline directly
-        # This way, it only scrapes if the 4-hour window has actually passed
-        smart_run_scraper()
 
 if __name__ == '__main__':
-    # Use the PORT env var provided by Render, default to 5000
-    port = int(os.environ.get("PORT", 5000))
-    scheduler.init_app(app)
-    scheduler.start()
+ 
     # In production, we don't use app.run(), but this is a safety fallback
     app.run(host='0.0.0.0', port=port)
