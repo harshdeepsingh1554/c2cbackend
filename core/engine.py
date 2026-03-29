@@ -105,8 +105,10 @@ class CareerEngine:
                 # 1. Try cached courses first (fast)
                 local_hits = [
                     c for c in self.courses_data
-                    if skill_lower in (c.get('title', '') + ' ' + c.get('skills', '') + ' ' + c.get('field', '')).lower()
-                ][:3]
+                   def to_str(val):
+                        return ' '.join(val) if isinstance(val, list) else (val or '')
+
+                   if skill_lower in (to_str(c.get('title', '')) + ' ' + to_str(c.get('skills', '')) + ' ' + to_str(c.get('field', ''))).lower()
 
                 for c in local_hits:
                     cid = c.get('id') or c.get('title')
