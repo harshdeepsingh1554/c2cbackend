@@ -1,5 +1,13 @@
 from core.shared_utils import nlp
 
+
+def _to_str(val):
+    """Safely convert any field to a plain string for text matching."""
+    if isinstance(val, list):
+        return ' '.join(str(v) for v in val)
+    return str(val) if val else ''
+
+
 class CareerEngine:
     def __init__(self, supabase_client):
         self.supabase = supabase_client
@@ -8,7 +16,7 @@ class CareerEngine:
         self.refresh_cache()
 
     def refresh_cache(self):
-        """Syncs jobs AND courses from Supabase and pre-computes vectors."""
+        """Syncs jobs AND courses from Supabase and pre-computes NLP vectors."""
         try:
             print("🔍 Engine: Syncing jobs from Supabase...")
             job_res = self.supabase.table('jobs').select("*").execute()
@@ -16,16 +24,15 @@ class CareerEngine:
 
             processed = []
             for job in raw_jobs:
-                title_text  = job.get('title', '')
-                skills_text = job.get('skills', '')
-                job['title_doc']  = nlp(title_text)  if title_text  else nlp('')
-                job['skills_doc'] = nlp(skills_text) if skills_text else nlp('')
+                title_text  = _to_str(job.get('title', ''))
+                skills_text = _to_str(job.get('skills', ''))
+                job['title_doc']  = nlp(title_text)
+                job['skills_doc'] = nlp(skills_text)
                 processed.append(job)
 
             self.jobs_data = processed
             print(f"✅ Engine: Cached {len(self.jobs_data)} jobs.")
 
-            # ✅ NEW: Cache courses too for faster lookup
             print("🔍 Engine: Syncing courses from Supabase...")
             course_res = self.supabase.table('courses').select("*").execute()
             self.courses_data = course_res.data or []
@@ -35,11 +42,11 @@ class CareerEngine:
             print(f"❌ Engine Cache Error: {e}")
 
     def recommend_by_job(self, user_job_title):
-        """Find top matching jobs for a given job title."""
+        """Find top matching jobs for a given job title using NLP similarity."""
         if not self.jobs_data:
             return {"error": "No jobs found in cache"}
 
-        user_doc = nlp(user_job_title)
+        user_doc = nlp(_to_str(user_job_title))
 
         matches = []
         for job in self.jobs_data:
@@ -49,35 +56,44 @@ class CareerEngine:
                 score = 0.0
 
             matches.append({
-                "matched_job": job.get('title', ''),
-                "industry":    job.get('industry', ''),
+                "matched_job": _to_str(job.get('title')),
+                "industry":    _to_str(job.get('industry')),
                 "accuracy":    round(score * 100, 2),
-                "url":         job.get('link', '#'),
-                "skills":      job.get('skills', ''),
+                "url":         _to_str(job.get('link')) or '#',
+                "skills":      _to_str(job.get('skills')),
             })
 
-        # Return top result (single job match, preserved for API contract)
         return sorted(matches, key=lambda x: x['accuracy'], reverse=True)[0]
 
     def recommend_by_skills(self, user_skills_raw):
         """
-        Full gap analysis:
-        - Returns top 8 job matches (was 3)
-        - Finds missing skills per job
-        - Recommends up to 3 courses per missing skill (was 1 skill, 2 courses)
-        - Falls back to keyword search across title+description if DB courses are empty
+        Full skill gap analysis:
+        - Scores all jobs by NLP similarity to user skills (title 40% + skills 60%)
+        - Returns top 8 matches
+        - Finds missing skills per job (up to 6 shown)
+        - Recommends up to 3 courses per missing skill (capped at 6 total)
+        - Falls back to live DB query if local cache has no match
         """
         if not self.jobs_data:
             return []
 
-        user_doc        = nlp(user_skills_raw)
-        user_skills_set = {s.strip().lower() for s in user_skills_raw.split(',') if s.strip()}
+        # Normalise input — handle both comma strings and lists
+        if isinstance(user_skills_raw, list):
+            user_skills_str = ', '.join(user_skills_raw)
+        else:
+            user_skills_str = _to_str(user_skills_raw)
 
-        # ── Score every job ──────────────────────────────────────────────────
+        user_doc        = nlp(user_skills_str)
+        user_skills_set = {
+            s.strip().lower()
+            for s in user_skills_str.split(',')
+            if s.strip()
+        }
+
+        # ── Score every cached job ───────────────────────────────────────────
         job_matches = []
         for job in self.jobs_data:
             try:
-                # Blend title similarity + skills similarity (60/40 weight)
                 title_score  = user_doc.similarity(job['title_doc'])
                 skills_score = user_doc.similarity(job['skills_doc'])
                 score = (title_score * 0.4) + (skills_score * 0.6)
@@ -85,51 +101,59 @@ class CareerEngine:
                 score = 0.0
             job_matches.append({**job, "score": score})
 
-        # ✅ Return top 8 instead of 3
         top_jobs = sorted(job_matches, key=lambda x: x['score'], reverse=True)[:8]
 
         results = []
         for job in top_jobs:
-            raw_skills  = job.get('skills', '')
-            job_skills  = [s.strip() for s in raw_skills.split(',') if s.strip()]
-            missing     = [s for s in job_skills if s.lower() not in user_skills_set]
+            # Normalise job skills field — may be a comma string or a list
+            raw_skills = job.get('skills', '')
+            if isinstance(raw_skills, list):
+                job_skills = [s.strip() for s in raw_skills if s.strip()]
+            else:
+                job_skills = [s.strip() for s in _to_str(raw_skills).split(',') if s.strip()]
 
-            # ── Course recommendations ───────────────────────────────────────
-            # ✅ Search top 3 missing skills (was 1), 3 courses each (was 2)
+            missing = [s for s in job_skills if s.lower() not in user_skills_set]
+
+            # ── Course recommendations per missing skill ──────────────────────
             courses = []
             seen_course_ids = set()
 
             for skill in missing[:3]:
                 skill_lower = skill.lower()
 
-                # 1. Try cached courses first (fast)
-                local_hits = [
-                    c for c in self.courses_data
-                   def to_str(val):
-                        return ' '.join(val) if isinstance(val, list) else (val or '')
+                # Build a searchable text blob for each cached course
+                local_hits = []
+                for c in self.courses_data:
+                    blob = (
+                        _to_str(c.get('title'))   + ' ' +
+                        _to_str(c.get('skills'))  + ' ' +
+                        _to_str(c.get('field'))
+                    ).lower()
+                    if skill_lower in blob:
+                        local_hits.append(c)
 
-                   if skill_lower in (to_str(c.get('title', '')) + ' ' + to_str(c.get('skills', '')) + ' ' + to_str(c.get('field', ''))).lower()
+                local_hits = local_hits[:20]
 
                 for c in local_hits:
                     cid = c.get('id') or c.get('title')
                     if cid not in seen_course_ids:
                         seen_course_ids.add(cid)
                         courses.append({
-                            "title":    c.get('title', ''),
-                            "link":     c.get('link') or c.get('url') or '#',
-                            "provider": c.get('provider', ''),
+                            "title":    _to_str(c.get('title')),
+                            "link":     _to_str(c.get('link') or c.get('url')) or '#',
+                            "provider": _to_str(c.get('provider')),
                             "skill":    skill,
                         })
+                        if len(courses) >= 6:
+                            break
 
-                # 2. Fallback: DB query if local cache gave nothing
+                # Fallback: live DB query if cache gave nothing for this skill
                 if not local_hits:
                     try:
-                        # Try exact skill match first
                         res = self.supabase.table('courses').select("*") \
                             .ilike('title', f'%{skill}%').limit(3).execute()
                         db_courses = res.data or []
 
-                        # Broaden to field if still empty
                         if not db_courses:
                             res2 = self.supabase.table('courses').select("*") \
                                 .ilike('field', f'%{skill}%').limit(3).execute()
@@ -140,21 +164,27 @@ class CareerEngine:
                             if cid not in seen_course_ids:
                                 seen_course_ids.add(cid)
                                 courses.append({
-                                    "title":    c.get('title', ''),
-                                    "link":     c.get('link') or c.get('url') or '#',
-                                    "provider": c.get('provider', ''),
+                                    "title":    _to_str(c.get('title')),
+                                    "link":     _to_str(c.get('link') or c.get('url')) or '#',
+                                    "provider": _to_str(c.get('provider')),
                                     "skill":    skill,
                                 })
+                                if len(courses) >= 6:
+                                    break
+
                     except Exception as e:
                         print(f"⚠️ Course fetch error for '{skill}': {e}")
 
+                if len(courses) >= 6:
+                    break
+
             results.append({
-                "job":              job.get('title', ''),
-                "industry":         job.get('industry', ''),
-                "url":              job.get('link', '#'),
+                "job":              _to_str(job.get('title')),
+                "industry":         _to_str(job.get('industry')),
+                "url":              _to_str(job.get('link')) or '#',
                 "match_confidence": round(job['score'] * 100, 2),
-                "missing_skills":   missing[:6],   # show up to 6 missing skills
-                "courses":          courses[:6],   # cap at 6 course suggestions
+                "missing_skills":   missing[:6],
+                "courses":          courses[:6],
             })
 
         return results
